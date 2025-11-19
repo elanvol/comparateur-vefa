@@ -41,40 +41,10 @@ def extract_text_from_docx(uploaded_file):
         st.error(f"Erreur de lecture du fichier : {e}")
         return None
 
-def get_best_available_model(api_key):
-    """
-    Détecte automatiquement le meilleur modèle disponible pour cette clé API.
-    Ordre de préférence : 1.5-Pro > 1.5-Flash > 1.0-Pro
-    """
-    try:
-        genai.configure(api_key=api_key)
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        
-        # Logique de priorité
-        if any('gemini-1.5-pro' in m for m in available_models):
-            return 'gemini-1.5-pro'
-        elif any('gemini-1.5-flash' in m for m in available_models):
-            return 'gemini-1.5-flash'
-        elif any('gemini-pro' in m for m in available_models):
-            return 'gemini-pro'
-        else:
-            # Retourne le premier modèle disponible par défaut ou une erreur
-            return available_models[0] if available_models else None
-    except Exception as e:
-        # Si la clé est invalide, list_models va planter
-        return None
-
 # --- FONCTION PRINCIPALE D'ANALYSE ---
 
 def analyze_contracts(text_v1, text_v2, api_key):
-    # 1. Trouver le modèle
-    model_name = get_best_available_model(api_key)
-    
-    if not model_name:
-        raise ValueError("Impossible de trouver un modèle Gemini ou Clé API invalide.")
-        
-    st.toast(f"Modèle utilisé : {model_name}", icon="🤖") # Feedback utilisateur
-    
+    # CONFIGURATION STRICTE DU MODÈLE FLASH (Le plus fiable actuellement)
     genai.configure(api_key=api_key)
     
     generation_config = {
@@ -82,8 +52,9 @@ def analyze_contracts(text_v1, text_v2, api_key):
         "response_mime_type": "application/json",
     }
 
+    # On force gemini-1.5-flash qui est disponible pour toutes les clés récentes
     model = genai.GenerativeModel(
-        model_name=model_name,
+        model_name="gemini-1.5-flash",
         generation_config=generation_config,
     )
 
@@ -119,7 +90,7 @@ def analyze_contracts(text_v1, text_v2, api_key):
 with st.sidebar:
     st.title("⚙️ Configuration")
     api_key = st.text_input("Clé API Gemini", type="password")
-    st.info("Si vous avez une erreur, vérifiez que votre clé est active sur Google AI Studio.")
+    st.info("Utilise le modèle Gemini 1.5 Flash (Rapide & Gratuit)")
     st.divider()
     st.markdown("### Légende")
     st.markdown("🟢 **Identique**")
@@ -153,7 +124,7 @@ if start_analysis:
     elif not text_v1 or not text_v2:
         st.warning("⚠️ Veuillez charger les deux documents.")
     else:
-        with st.spinner("🤖 Recherche du meilleur modèle et Analyse en cours..."):
+        with st.spinner("🤖 Analyse juridique en cours avec Gemini 1.5 Flash..."):
             try:
                 data = analyze_contracts(text_v1, text_v2, api_key)
                 st.session_state['analysis_result'] = data
@@ -178,7 +149,6 @@ if 'analysis_result' in st.session_state:
             content = item.get('annotatedDiffV2', item['textV2']) if cat == 'MODIFIED' else item['textV2']
             sim = f"- Sim: {item['similarityScore']}%" if item.get('similarityScore') else ""
             
-            # CORRECTION ICI : Utilisation de simple quotes pour l'HTML à l'intérieur du f-string
             st.markdown(f"""
             <div class='report-box cat-{cat}'>
                 <div class='tooltip'>{cat} {sim}</div>
@@ -189,7 +159,6 @@ if 'analysis_result' in st.session_state:
         if missing:
             st.markdown("#### 🗑️ Clauses supprimées (Présentes en V1 uniquement)")
             for item in missing:
-                # CORRECTION ICI ÉGALEMENT
                 st.markdown(f"<div class='report-box cat-MISSING'><div>{item['textV1']}</div></div>", unsafe_allow_html=True)
 
     # VUE 2
