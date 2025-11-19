@@ -10,7 +10,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- CSS PERSONNALISÉ (STYLE) ---
+# --- CSS PERSONNALISÉ ---
 st.markdown("""
 <style>
     .report-box { padding: 15px; border-radius: 5px; margin-bottom: 10px; border-left: 5px solid; }
@@ -26,49 +26,67 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- FONCTION D'EXTRACTION DU TEXTE WORD ---
+# --- FONCTIONS UTILITAIRES ---
+
 def extract_text_from_docx(uploaded_file):
     """Lit un fichier .docx et retourne le texte brut."""
     try:
         doc = Document(uploaded_file)
         full_text = []
         for para in doc.paragraphs:
-            # On ne garde que les paragraphes non vides pour nettoyer un peu
             if para.text.strip():
                 full_text.append(para.text)
         return '\n\n'.join(full_text)
     except Exception as e:
-        st.error(f"Erreur lors de la lecture du fichier : {e}")
+        st.error(f"Erreur de lecture du fichier : {e}")
         return None
 
-# --- SIDEBAR : CONFIGURATION ---
-with st.sidebar:
-    st.title("⚙️ Configuration")
-    api_key = st.text_input("Clé API Gemini", type="password")
-    st.info("Nécessite une clé [Google AI Studio](https://aistudio.google.com/).")
-    st.divider()
-    st.markdown("### Légende")
-    st.markdown("🟢 **Identique**")
-    st.markdown("🟡 **Modifié** (Attention requise)")
-    st.markdown("🔴 **Ajouté** (Nouveau dans V2)")
-    st.markdown("🔵 **Déplacé**")
-    st.markdown("⚪ **Supprimé**")
+def get_best_available_model(api_key):
+    """
+    Détecte automatiquement le meilleur modèle disponible pour cette clé API.
+    Ordre de préférence : 1.5-Pro > 1.5-Flash > 1.0-Pro
+    """
+    try:
+        genai.configure(api_key=api_key)
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        # Logique de priorité
+        if any('gemini-1.5-pro' in m for m in available_models):
+            return 'gemini-1.5-pro'
+        elif any('gemini-1.5-flash' in m for m in available_models):
+            return 'gemini-1.5-flash'
+        elif any('gemini-pro' in m for m in available_models):
+            return 'gemini-pro'
+        else:
+            # Retourne le premier modèle disponible par défaut ou une erreur
+            return available_models[0] if available_models else None
+    except Exception as e:
+        # Si la clé est invalide, list_models va planter
+        return None
 
-# --- FONCTION PRINCIPALE GEMINI ---
+# --- FONCTION PRINCIPALE D'ANALYSE ---
+
 def analyze_contracts(text_v1, text_v2, api_key):
+    # 1. Trouver le modèle
+    model_name = get_best_available_model(api_key)
+    
+    if not model_name:
+        raise ValueError("Impossible de trouver un modèle Gemini ou Clé API invalide.")
+        
+    st.toast(f"Modèle utilisé : {model_name}", icon="🤖") # Feedback utilisateur
+    
     genai.configure(api_key=api_key)
     
     generation_config = {
-        "temperature": 0.1, # Température basse pour plus de rigueur
+        "temperature": 0.1,
         "response_mime_type": "application/json",
     }
 
     model = genai.GenerativeModel(
-        model_name="gemini-1.5-pro",
+        model_name=model_name,
         generation_config=generation_config,
     )
 
-    # Le Prompt Système reste le même
     system_prompt = """
     Tu es un expert juridique. Compare les deux textes suivants (V1 et V2).
     Retourne UNIQUEMENT un JSON respectant strictement cette structure :
@@ -94,113 +112,105 @@ def analyze_contracts(text_v1, text_v2, api_key):
     
     user_message = f"--- DOCUMENT V1 (Origine) ---\n{text_v1}\n\n--- DOCUMENT V2 (Final) ---\n{text_v2}"
 
-    with st.spinner("🤖 Lecture et Analyse juridique en cours..."):
-        response = model.generate_content([system_prompt, user_message])
-        return json.loads(response.text)
+    response = model.generate_content([system_prompt, user_message])
+    return json.loads(response.text)
 
-# --- INTERFACE UTILISATEUR PRINCIPALE ---
+# --- INTERFACE UTILISATEUR ---
+with st.sidebar:
+    st.title("⚙️ Configuration")
+    api_key = st.text_input("Clé API Gemini", type="password")
+    st.info("Si vous avez une erreur, vérifiez que votre clé est active sur Google AI Studio.")
+    st.divider()
+    st.markdown("### Légende")
+    st.markdown("🟢 **Identique**")
+    st.markdown("🟡 **Modifié**")
+    st.markdown("🔴 **Ajouté**")
+    st.markdown("🔵 **Déplacé**")
+    st.markdown("⚪ **Supprimé**")
+
 st.title("⚖️ Comparateur Légal Intelligent")
-st.markdown("Téléchargez vos contrats au format **.docx** pour lancer l'analyse.")
+st.markdown("Téléchargez vos contrats au format **.docx** (Word) pour lancer l'analyse.")
 
 col1, col2 = st.columns(2)
 
-# Gestion V1
 with col1:
     st.subheader("1. Contrat de Réservation (V1)")
-    file_v1 = st.file_uploader("Déposer le fichier V1", type=["docx"], key="v1")
-    text_v1 = ""
-    if file_v1:
-        text_v1 = extract_text_from_docx(file_v1)
-        if text_v1:
-            st.success(f"V1 chargé : {len(text_v1)} caractères.")
+    file_v1 = st.file_uploader("Fichier V1", type=["docx"], key="v1")
+    text_v1 = extract_text_from_docx(file_v1) if file_v1 else ""
+    if text_v1: st.success(f"V1: {len(text_v1)} caractères")
 
-# Gestion V2
 with col2:
     st.subheader("2. Acte de Vente Final (V2)")
-    file_v2 = st.file_uploader("Déposer le fichier V2", type=["docx"], key="v2")
-    text_v2 = ""
-    if file_v2:
-        text_v2 = extract_text_from_docx(file_v2)
-        if text_v2:
-            st.success(f"V2 chargé : {len(text_v2)} caractères.")
+    file_v2 = st.file_uploader("Fichier V2", type=["docx"], key="v2")
+    text_v2 = extract_text_from_docx(file_v2) if file_v2 else ""
+    if text_v2: st.success(f"V2: {len(text_v2)} caractères")
 
-# Bouton d'action
 start_analysis = st.button("Lancer l'Analyse Comparative", type="primary", use_container_width=True)
 
 if start_analysis:
     if not api_key:
         st.error("⚠️ Clé API manquante.")
     elif not text_v1 or not text_v2:
-        st.warning("⚠️ Veuillez charger les deux documents .docx avant de lancer l'analyse.")
+        st.warning("⚠️ Veuillez charger les deux documents.")
     else:
-        try:
-            data = analyze_contracts(text_v1, text_v2, api_key)
-            st.session_state['analysis_result'] = data
-        except Exception as e:
-            st.error(f"Une erreur est survenue : {e}")
+        with st.spinner("🤖 Recherche du meilleur modèle et Analyse en cours..."):
+            try:
+                data = analyze_contracts(text_v1, text_v2, api_key)
+                st.session_state['analysis_result'] = data
+            except Exception as e:
+                st.error(f"Erreur technique : {e}")
 
-# --- AFFICHAGE DES RÉSULTATS (Identique à la version précédente) ---
+# --- VISUALISATION DES RÉSULTATS ---
 if 'analysis_result' in st.session_state:
     data = st.session_state['analysis_result']
     comp_data = data.get("comparisonData", [])
     legal_data = data.get("legalAnalysis", {})
 
     st.divider()
-    tab1, tab2, tab3 = st.tabs(["📄 Vue Documentaire Annotée", "🔍 Vue Comparative (Diff)", "⚖️ Risques Légaux"])
+    tab1, tab2, tab3 = st.tabs(["📄 Vue Annotée", "🔍 Différences", "⚖️ Analyse Légale"])
 
-    # VUE 1 : TEXTE COMPLET V2 ANNOTÉ
+    # VUE 1
     with tab1:
-        st.markdown("### Document V2 reconstitué avec annotations")
+        st.caption("Ce document est une reconstruction du texte V2 incluant les codes couleurs.")
         for item in comp_data:
             if item['category'] == 'MISSING': continue
-            
             cat = item['category']
             content = item.get('annotatedDiffV2', item['textV2']) if cat == 'MODIFIED' else item['textV2']
-            similarity = f"<span style='float:right; font-size:0.8em'>Similarité: {item['similarityScore']}%</span>" if item.get('similarityScore') else ""
+            sim = f"- Sim: {item['similarityScore']}%" if item.get('similarityScore') else ""
             
             st.markdown(f"""
             <div class="report-box cat-{cat}">
-                <div class="tooltip">{cat} {similarity}</div>
+                <div class="tooltip">{cat} {sim}</div>
                 <div>{content}</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-        # Section des éléments supprimés à la fin
+            </div>""", unsafe_allow_html=True)
+        
         missing = [x for x in comp_data if x['category'] == 'MISSING']
         if missing:
-            st.markdown("#### 🗑️ Éléments présents en V1 mais supprimés de V2")
+            st.markdown("#### 🗑️ Clauses supprimées (Présentes en V1 uniquement)")
             for item in missing:
-                st.markdown(f"""<div class="report-box cat-MISSING"><div>{item['textV1']}</div></div>""", unsafe_allow_html=True)
+                st.markdown(f"<div class="report-box cat-MISSING"><div>{item['textV1']}</div></div>", unsafe_allow_html=True)
 
-    # VUE 2 : COMPARAISON CÔTE À CÔTE
+    # VUE 2
     with tab2:
         filter_cat = st.radio("Filtrer :", ["MODIFIED", "ADDED", "MISSING", "MOVED"], horizontal=True)
         items = [x for x in comp_data if x['category'] == filter_cat]
-        
-        if not items:
-            st.info("Aucun élément dans cette catégorie.")
-        
+        if not items: st.info("Aucun élément.")
         for item in items:
             c1, c2 = st.columns(2)
-            with c1:
-                st.caption("Version V1")
-                st.text_area(label="v1", value=item.get('textV1', 'N/A'), height=150, disabled=True, key=f"v1_{item['id']}")
-            with c2:
-                st.caption("Version V2")
-                diff_html = item.get('annotatedDiffV2', item.get('textV2', 'N/A'))
-                st.markdown(f"<div class='cat-{filter_cat}' style='padding:10px; height:150px; overflow-y:auto; border-radius:5px'>{diff_html}</div>", unsafe_allow_html=True)
+            with c1: st.info(item.get('textV1', 'N/A'))
+            with c2: 
+                diff = item.get('annotatedDiffV2', item.get('textV2', 'N/A'))
+                st.markdown(f"<div class='cat-{filter_cat}' style='padding:10px'>{diff}</div>", unsafe_allow_html=True)
             st.markdown("---")
 
-    # VUE 3 : ANALYSE LÉGALE
+    # VUE 3
     with tab3:
-        st.subheader("Lois Obsolètes")
+        st.subheader("Alertes Légales")
+        if not legal_data.get('obsoleteLaws') and not legal_data.get('interDocContradictions'):
+            st.success("R.A.S : Aucune alerte majeure détectée.")
+            
         for law in legal_data.get('obsoleteLaws', []):
-            st.warning(f"**{law['sourceDoc']}**: \"{law['quote']}\" -> {law['issue']} (Suggestion: {law['suggestion']})")
+            st.warning(f"**Loi Obsolète ({law['sourceDoc']})**: {law['issue']}\n> {law['quote']}")
         
-        st.subheader("Contradictions")
         for conflict in legal_data.get('interDocContradictions', []):
-            st.error(f"Conflit entre V1/V2 : {conflict['conflictDescription']}")
-
-
-
-
+            st.error(f"**Conflit V1 vs V2** : {conflict['conflictDescription']}")
