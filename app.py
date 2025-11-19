@@ -64,7 +64,7 @@ def analyze_contracts(text_v1, text_v2, api_key):
     }
 
     model = genai.GenerativeModel(
-        model_name="gemini-1.5-pro",
+        model_name="gemini-1.5-flash",
         generation_config=generation_config,
     )
 
@@ -200,3 +200,4 @@ if 'analysis_result' in st.session_state:
         st.subheader("Contradictions")
         for conflict in legal_data.get('interDocContradictions', []):
             st.error(f"Conflit entre V1/V2 : {conflict['conflictDescription']}")
+
