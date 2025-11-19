@@ -38,7 +38,8 @@ def ask_gemini_annotation(model, text_B, text_A_candidate, is_candidate_found):
     PASSAGE A (Reference) : "{text_A_candidate}"
     PASSAGE B (A analyser) : "{text_B}"
 
-    Ta mission : Retourne UNIQUEMENT l'annotation correspondante parmi ces choix :
+    TACHE :
+    Retourne UNIQUEMENT l'annotation correspondante parmi ces choix :
     1. Si identique (ou différences mineures de ponctuation/casse) -> "[Repris tel quel]"
     2. Si le sens est le même mais formulé différemment ou changements de valeurs -> "[Modifié : explication courte de la différence]"
     3. Si c'est clairement le même paragraphe mais à un endroit différent -> "[Déplacé depuis A]"
@@ -80,7 +81,9 @@ def generate_comparison_report(file_ref, file_target, model):
         
         current_idx += 1
         status_text.text(f"Analyse du passage {current_idx}/{total_paras_target}...")
-        progress_bar.progress(current_idx / total_paras_target)
+        
+        if total_paras_target > 0:
+            progress_bar.progress(current_idx / total_paras_target)
 
         # --- Etape A : Recherche du meilleur candidat dans A (Algorithme rapide) ---
         best_match_idx = -1
@@ -138,9 +141,15 @@ def generate_comparison_report(file_ref, file_target, model):
     heading = doc_target.add_heading('TABLEAU DES ÉLÉMENTS MANQUANTS (OUBLIÉS DANS B)', level=1)
     heading.style.font.color.rgb = RGBColor(255, 0, 0)
     
-    # Création du tableau
+    # Création du tableau (CORRECTION ICI POUR ÉVITER LE CRASH)
     table = doc_target.add_table(rows=1, cols=2)
-    table.style = 'Table Grid'
+    try:
+        table.style = 'Table Grid'
+    except KeyError:
+        pass # Si le style n'existe pas dans le doc, on continue sans style (pas de crash)
+    except ValueError:
+        pass
+
     hdr_cells = table.rows[0].cells
     hdr_cells[0].text = 'Statut'
     hdr_cells[1].text = 'Passage du Texte A (Référence) absent de B'
