@@ -6,12 +6,11 @@ import difflib
 import re
 from io import BytesIO
 import google.generativeai as genai
-import time
 
 # --- CONFIGURATION GEMINI ---
 def configure_gemini(api_key):
     genai.configure(api_key=api_key)
-    return genai.GenerativeModel('gemini-1.5-flash') # Modèle rapide et efficace
+    return genai.GenerativeModel('gemini-1.5-flash')
 
 # --- FONCTIONS UTILITAIRES ---
 
@@ -64,6 +63,20 @@ def parse_gemini_response(response_text):
             
     return statut, commentaire
 
+def apply_color(paragraph, color_rgb):
+    """Applique une couleur à tout le paragraphe."""
+    for run in paragraph.runs:
+        run.font.color.rgb = color_rgb
+
+def add_comment(paragraph, text, highlight_color):
+    """Simule un commentaire en ajoutant du texte surligné à la fin du paragraphe"""
+    run = paragraph.add_run(f" [{text}]")
+    run.font.highlight_color = highlight_color
+    run.font.bold = True
+    # On essaie de garder la taille de police du paragraphe s'il y en a une définie
+    if paragraph.runs and paragraph.runs[0].font.size:
+        run.font.size = paragraph.runs[0].font.size
+
 def compare_documents_with_ai(file_resa, file_vefa, model):
     doc_resa = Document(file_resa)
     doc_vefa = Document(file_vefa)
@@ -75,8 +88,9 @@ def compare_documents_with_ai(file_resa, file_vefa, model):
     total_paras = len(doc_vefa.paragraphs)
     
     for i, p_vefa in enumerate(doc_vefa.paragraphs):
-        # Mise à jour barre de progression
-        progress_bar.progress((i + 1) / total_paras)
+        # Mise à jour barre de progression (gestion des divisions par zéro si doc vide)
+        if total_paras > 0:
+            progress_bar.progress((i + 1) / total_paras)
         
         text_vefa = p_vefa.text.strip()
         if not text_vefa:
@@ -85,11 +99,10 @@ def compare_documents_with_ai(file_resa, file_vefa, model):
         best_match_index = -1
         best_ratio = 0
         
-        # 1. Recherche algorithmique rapide du meilleur candidat (pour éviter d'envoyer tout le doc à l'IA à chaque fois)
+        # 1. Recherche algorithmique rapide
         for idx, p_resa in enumerate(resa_paragraphs):
             if p_resa['matched']: continue
             
-            # On compare sur la base normalisée pour trouver le bon paragraphe
             ratio = difflib.SequenceMatcher(None, normalize_text_simple(p_resa['text']), text_vefa).ratio()
             if ratio > best_ratio:
                 best_ratio = ratio
@@ -97,40 +110,35 @@ def compare_documents_with_ai(file_resa, file_vefa, model):
         
         # SEUILS DE DECISION
         if best_ratio > 0.98:
-            # Cas 1 : Quasi identique (juste changement de nom standard) -> Pas besoin d'IA, c'est VERT
             apply_color(p_vefa, RGBColor(0, 128, 0))
             resa_paragraphs[best_match_index]['matched'] = True
             
         elif best_ratio > 0.60:
-            # Cas 2 : Ressemble mais différences -> ON APPELLE GEMINI
             text_source = resa_paragraphs[best_match_index]['text']
             
-            # Appel API (Attention au temps de latence)
             ai_raw_response = ask_gemini_analysis(model, text_source, text_vefa)
             statut, commentaire = parse_gemini_response(ai_raw_response)
             
             resa_paragraphs[best_match_index]['matched'] = True
             
             if "IDENTIQUE" in statut or "MODIFIE_MINEUR" in statut:
-                apply_color(p_vefa, RGBColor(0, 128, 0)) # Vert si l'IA dit que c'est bon sémantiquement
+                apply_color(p_vefa, RGBColor(0, 128, 0)) 
                 if "MODIFIE_MINEUR" in statut:
-                     # On ajoute quand même le commentaire pour info
                     add_comment(p_vefa, f"IA: {commentaire}", WD_COLOR_INDEX.BRIGHT_GREEN)
                     
             elif "INCOHERENCE" in statut:
-                apply_color(p_vefa, RGBColor(255, 0, 0)) # ROUGE VIF
+                apply_color(p_vefa, RGBColor(255, 0, 0)) 
                 add_comment(p_vefa, f"⚠️ ALERTE IA : {commentaire}", WD_COLOR_INDEX.YELLOW)
                 
-            else: # MODIFIE MAJEUR
-                apply_color(p_vefa, RGBColor(255, 165, 0)) # ORANGE
+            else: 
+                apply_color(p_vefa, RGBColor(255, 165, 0)) 
                 add_comment(p_vefa, f"Modification : {commentaire}", WD_COLOR_INDEX.TURQUOISE)
 
         else:
-            # Cas 3 : Nouvel ajout (Pas de correspondance trouvée) -> ROUGE
             apply_color(p_vefa, RGBColor(255, 0, 0))
             add_comment(p_vefa, "Ajout : Clause absente du contrat de réservation", WD_COLOR_INDEX.PINK)
 
-    # --- CLAUSES OUBLIÉES ---
+    # --- CORRECTION DE L'ERREUR ICI ---
     doc_vefa.add_page_break()
     doc_vefa.add_heading('ANNEXE : CLAUSES NON REPRISES (DÉTECTÉES PAR IA)', level=1)
     
@@ -138,22 +146,14 @@ def compare_documents_with_ai(file_resa, file_vefa, model):
     for p_resa in resa_paragraphs:
         if not p_resa['matched']:
             count_forgotten += 1
-            p = doc_vefa.add_paragraph(p_resa['text'])
-            p.italic = True
-            p.font.color.rgb = RGBColor(128, 128, 128)
+            # On crée le paragraphe vide
+            p = doc_vefa.add_paragraph()
+            # On ajoute un "run" (le texte) pour pouvoir le styliser
+            run = p.add_run(p_resa['text'])
+            run.font.italic = True
+            run.font.color.rgb = RGBColor(128, 128, 128) # Gris
 
     return doc_vefa, count_forgotten
-
-def apply_color(paragraph, color_rgb):
-    for run in paragraph.runs:
-        run.font.color.rgb = color_rgb
-
-def add_comment(paragraph, text, highlight_color):
-    """Simule un commentaire en ajoutant du texte surligné à la fin du paragraphe"""
-    run = paragraph.add_run(f" [{text}]")
-    run.font.highlight_color = highlight_color
-    run.font.bold = True
-    run.font.size = paragraph.runs[0].font.size # Garde la même taille
 
 # --- INTERFACE ---
 
