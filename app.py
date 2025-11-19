@@ -178,9 +178,10 @@ if 'analysis_result' in st.session_state:
             content = item.get('annotatedDiffV2', item['textV2']) if cat == 'MODIFIED' else item['textV2']
             sim = f"- Sim: {item['similarityScore']}%" if item.get('similarityScore') else ""
             
+            # CORRECTION ICI : Utilisation de simple quotes pour l'HTML à l'intérieur du f-string
             st.markdown(f"""
-            <div class="report-box cat-{cat}">
-                <div class="tooltip">{cat} {sim}</div>
+            <div class='report-box cat-{cat}'>
+                <div class='tooltip'>{cat} {sim}</div>
                 <div>{content}</div>
             </div>""", unsafe_allow_html=True)
         
@@ -188,7 +189,8 @@ if 'analysis_result' in st.session_state:
         if missing:
             st.markdown("#### 🗑️ Clauses supprimées (Présentes en V1 uniquement)")
             for item in missing:
-                st.markdown(f"<div class="report-box cat-MISSING"><div>{item['textV1']}</div></div>", unsafe_allow_html=True)
+                # CORRECTION ICI ÉGALEMENT
+                st.markdown(f"<div class='report-box cat-MISSING'><div>{item['textV1']}</div></div>", unsafe_allow_html=True)
 
     # VUE 2
     with tab2:
