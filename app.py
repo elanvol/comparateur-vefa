@@ -4,18 +4,6 @@ import json
 from docx import Document
 
 # --- CONFIGURATION DE LA PAGE ---
-import google.generativeai as genai
-import os
-
-# Remplacez par votre clé API si vous testez en local
-api_key = "VOTRE_CLE_API_ICI" 
-genai.configure(api_key=api_key)
-
-print("--- LISTE DES MODÈLES DISPONIBLES ---")
-for m in genai.list_models():
-  if 'generateContent' in m.supported_generation_methods:
-    print(m.name)
-print("-------------------------------------")
 st.set_page_config(
     page_title="LegalMatch AI - Comparateur de Contrats",
     page_icon="⚖️",
@@ -212,5 +200,6 @@ if 'analysis_result' in st.session_state:
         st.subheader("Contradictions")
         for conflict in legal_data.get('interDocContradictions', []):
             st.error(f"Conflit entre V1/V2 : {conflict['conflictDescription']}")
+
 
 
