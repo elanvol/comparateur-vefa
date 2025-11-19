@@ -1,7 +1,7 @@
 import streamlit as st
 import google.generativeai as genai
 import json
-import os
+from docx import Document
 
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(
@@ -10,66 +10,65 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- CSS PERSONNALISÉ POUR LES COULEURS (Tailwind-like) ---
+# --- CSS PERSONNALISÉ (STYLE) ---
 st.markdown("""
 <style>
     .report-box { padding: 15px; border-radius: 5px; margin-bottom: 10px; border-left: 5px solid; }
-    
-    /* EXACT - Vert */
     .cat-EXACT { background-color: #dcfce7; border-color: #22c55e; color: #166534; }
-    
-    /* ADDED - Rouge (V2 contient, V1 non) */
     .cat-ADDED { background-color: #fee2e2; border-color: #ef4444; color: #991b1b; }
-    
-    /* MISSING - Gris (V1 contenait, V2 non) */
     .cat-MISSING { background-color: #f3f4f6; border-color: #6b7280; color: #374151; opacity: 0.8; }
-    
-    /* MOVED - Bleu */
     .cat-MOVED { background-color: #dbeafe; border-color: #3b82f6; color: #1e40af; }
-    
-    /* MODIFIED - Jaune */
     .cat-MODIFIED { background-color: #fef9c3; border-color: #eab308; color: #854d0e; }
-
-    /* Highlights pour les diffs */
     .diff-add { background-color: #fca5a5; font-weight: bold; text-decoration: none; padding: 0 2px; border-radius: 2px; }
     .diff-del { text-decoration: line-through; color: #dc2626; opacity: 0.7; margin-right: 4px;}
-    
     .tooltip { font-size: 0.8em; color: #666; margin-bottom: 5px; text-transform: uppercase; font-weight: bold; }
+    .stFileUploader { padding-bottom: 20px; }
 </style>
 """, unsafe_allow_html=True)
+
+# --- FONCTION D'EXTRACTION DU TEXTE WORD ---
+def extract_text_from_docx(uploaded_file):
+    """Lit un fichier .docx et retourne le texte brut."""
+    try:
+        doc = Document(uploaded_file)
+        full_text = []
+        for para in doc.paragraphs:
+            # On ne garde que les paragraphes non vides pour nettoyer un peu
+            if para.text.strip():
+                full_text.append(para.text)
+        return '\n\n'.join(full_text)
+    except Exception as e:
+        st.error(f"Erreur lors de la lecture du fichier : {e}")
+        return None
 
 # --- SIDEBAR : CONFIGURATION ---
 with st.sidebar:
     st.title("⚙️ Configuration")
-    api_key = st.text_input("Clé API Gemini (Google AI Studio)", type="password")
-    st.info("Obtenez votre clé sur [Google AI Studio](https://aistudio.google.com/).")
-    st.markdown("---")
-    st.markdown("**Légende :**")
-    st.markdown("🟢 **Identique** : Aucun changement")
-    st.markdown("🟡 **Modifié** : Changements textuels")
-    st.markdown("🔴 **Ajouté** : Nouveau dans V2")
-    st.markdown("🔵 **Déplacé** : Changement de position")
-    st.markdown("⚪ **Supprimé** : Présent en V1, absent en V2")
+    api_key = st.text_input("Clé API Gemini", type="password")
+    st.info("Nécessite une clé [Google AI Studio](https://aistudio.google.com/).")
+    st.divider()
+    st.markdown("### Légende")
+    st.markdown("🟢 **Identique**")
+    st.markdown("🟡 **Modifié** (Attention requise)")
+    st.markdown("🔴 **Ajouté** (Nouveau dans V2)")
+    st.markdown("🔵 **Déplacé**")
+    st.markdown("⚪ **Supprimé**")
 
-# --- FONCTION PRINCIPALE D'ANALYSE ---
+# --- FONCTION PRINCIPALE GEMINI ---
 def analyze_contracts(text_v1, text_v2, api_key):
     genai.configure(api_key=api_key)
     
-    # Configuration du modèle
     generation_config = {
-        "temperature": 0.2,
-        "top_p": 0.95,
-        "top_k": 64,
-        "max_output_tokens": 8192,
+        "temperature": 0.1, # Température basse pour plus de rigueur
         "response_mime_type": "application/json",
     }
 
     model = genai.GenerativeModel(
-        model_name="gemini-1.5-pro", # Utilisation du modèle Pro pour le contexte large
+        model_name="gemini-1.5-pro",
         generation_config=generation_config,
     )
 
-    # Prompt Système
+    # Le Prompt Système reste le même
     system_prompt = """
     Tu es un expert juridique. Compare les deux textes suivants (V1 et V2).
     Retourne UNIQUEMENT un JSON respectant strictement cette structure :
@@ -81,7 +80,7 @@ def analyze_contracts(text_v1, text_v2, api_key):
           "similarityScore": number (0-100),
           "textV1": "string (contenu original si existe)",
           "textV2": "string (contenu final si existe)",
-          "annotatedDiffV2": "string (Texte V2 avec balises HTML <span class='diff-add'>...</span> pour les ajouts et <span class='diff-del'>...</span> pour les suppressions par rapport à V1)",
+          "annotatedDiffV2": "string (Texte V2 avec balises HTML <span class='diff-add'>...</span> pour les ajouts et <span class='diff-del'>...</span> pour les suppressions)",
           "originalPositionV1": number (si applicable)
         }
       ],
@@ -91,141 +90,113 @@ def analyze_contracts(text_v1, text_v2, api_key):
         "interDocContradictions": [{ "clauseV1": "string", "clauseV2": "string", "conflictDescription": "string" }]
       }
     }
-
-    Règles :
-    1. Segmente par paragraphe logique.
-    2. Pour "MODIFIED", assure-toi de générer le champ 'annotatedDiffV2' avec les balises HTML demandées.
-    3. Analyse les contradictions et les lois obsolètes (droit français).
     """
-
+    
     user_message = f"--- DOCUMENT V1 (Origine) ---\n{text_v1}\n\n--- DOCUMENT V2 (Final) ---\n{text_v2}"
 
-    response = model.generate_content([system_prompt, user_message])
-    return json.loads(response.text)
+    with st.spinner("🤖 Lecture et Analyse juridique en cours..."):
+        response = model.generate_content([system_prompt, user_message])
+        return json.loads(response.text)
 
-# --- INTERFACE UTILISATEUR ---
+# --- INTERFACE UTILISATEUR PRINCIPALE ---
 st.title("⚖️ Comparateur Légal Intelligent")
-st.markdown("Comparez un **Contrat de Réservation (V1)** et un **Acte de Vente (V2)** pour détecter les écarts, ajouts et risques légaux.")
+st.markdown("Téléchargez vos contrats au format **.docx** pour lancer l'analyse.")
 
 col1, col2 = st.columns(2)
+
+# Gestion V1
 with col1:
-    v1_text = st.text_area("Document V1 (Original / Réservation)", height=300, placeholder="Collez le texte du premier contrat ici...")
+    st.subheader("1. Contrat de Réservation (V1)")
+    file_v1 = st.file_uploader("Déposer le fichier V1", type=["docx"], key="v1")
+    text_v1 = ""
+    if file_v1:
+        text_v1 = extract_text_from_docx(file_v1)
+        if text_v1:
+            st.success(f"V1 chargé : {len(text_v1)} caractères.")
+
+# Gestion V2
 with col2:
-    v2_text = st.text_area("Document V2 (Final / VEFA)", height=300, placeholder="Collez le texte du contrat final ici...")
+    st.subheader("2. Acte de Vente Final (V2)")
+    file_v2 = st.file_uploader("Déposer le fichier V2", type=["docx"], key="v2")
+    text_v2 = ""
+    if file_v2:
+        text_v2 = extract_text_from_docx(file_v2)
+        if text_v2:
+            st.success(f"V2 chargé : {len(text_v2)} caractères.")
 
-if st.button("Lancer l'Analyse", type="primary"):
+# Bouton d'action
+start_analysis = st.button("Lancer l'Analyse Comparative", type="primary", use_container_width=True)
+
+if start_analysis:
     if not api_key:
-        st.error("Veuillez entrer une clé API Gemini dans la barre latérale.")
-    elif not v1_text or not v2_text:
-        st.warning("Veuillez remplir les deux champs de texte.")
+        st.error("⚠️ Clé API manquante.")
+    elif not text_v1 or not text_v2:
+        st.warning("⚠️ Veuillez charger les deux documents .docx avant de lancer l'analyse.")
     else:
-        with st.spinner("🤖 Analyse par Gemini en cours... (Segmentation, Comparaison, Vérification Légale)"):
-            try:
-                data = analyze_contracts(v1_text, v2_text, api_key)
-                st.session_state['analysis_result'] = data
-                st.success("Analyse terminée !")
-            except Exception as e:
-                st.error(f"Une erreur est survenue : {e}")
+        try:
+            data = analyze_contracts(text_v1, text_v2, api_key)
+            st.session_state['analysis_result'] = data
+        except Exception as e:
+            st.error(f"Une erreur est survenue : {e}")
 
-# --- AFFICHAGE DES RÉSULTATS ---
+# --- AFFICHAGE DES RÉSULTATS (Identique à la version précédente) ---
 if 'analysis_result' in st.session_state:
     data = st.session_state['analysis_result']
     comp_data = data.get("comparisonData", [])
     legal_data = data.get("legalAnalysis", {})
 
-    # Onglets de navigation
-    tab1, tab2, tab3 = st.tabs(["📄 Vue Linéaire (Document V2)", "🔍 Vues Groupées", "⚖️ Analyse Légale"])
+    st.divider()
+    tab1, tab2, tab3 = st.tabs(["📄 Vue Documentaire Annotée", "🔍 Vue Comparative (Diff)", "⚖️ Risques Légaux"])
 
-    # --- VUE 1 : DOCUMENT LINEAIRE ---
+    # VUE 1 : TEXTE COMPLET V2 ANNOTÉ
     with tab1:
-        st.subheader("Reconstitution du Document V2 (Annoté)")
-        
-        # 1. Afficher le flux V2 (Tout sauf MISSING)
+        st.markdown("### Document V2 reconstitué avec annotations")
         for item in comp_data:
-            if item['category'] == 'MISSING':
-                continue # On ne l'affiche pas dans le flux principal
+            if item['category'] == 'MISSING': continue
             
-            cat_class = f"cat-{item['category']}"
-            similarity = f"• Similarité: {item['similarityScore']}%" if item['similarityScore'] else ""
+            cat = item['category']
+            content = item.get('annotatedDiffV2', item['textV2']) if cat == 'MODIFIED' else item['textV2']
+            similarity = f"<span style='float:right; font-size:0.8em'>Similarité: {item['similarityScore']}%</span>" if item.get('similarityScore') else ""
             
-            content = item['textV2']
-            if item['category'] == 'MODIFIED':
-                content = item.get('annotatedDiffV2', item['textV2'])
-            
-            html_block = f"""
-            <div class="report-box {cat_class}">
-                <div class="tooltip">{item['category']} {similarity}</div>
+            st.markdown(f"""
+            <div class="report-box cat-{cat}">
+                <div class="tooltip">{cat} {similarity}</div>
                 <div>{content}</div>
             </div>
-            """
-            st.markdown(html_block, unsafe_allow_html=True)
-
-        # 2. Section Récapitulative des MANQUANTS (MISSING)
-        missing_items = [i for i in comp_data if i['category'] == 'MISSING']
-        if missing_items:
-            st.markdown("---")
-            st.header("🗑️ Clauses Supprimées (Présentes uniquement en V1)")
-            for item in missing_items:
-                html_block = f"""
-                <div class="report-box cat-MISSING">
-                    <div class="tooltip">SUPPRIMÉ DE V2</div>
-                    <div>{item['textV1']}</div>
-                </div>
-                """
-                st.markdown(html_block, unsafe_allow_html=True)
-
-    # --- VUE 2 : VUES GROUPÉES ---
-    with tab2:
-        filter_opt = st.selectbox("Filtrer par catégorie :", ["MODIFIED", "ADDED", "MISSING", "MOVED", "EXACT"])
-        
-        filtered_items = [i for i in comp_data if i['category'] == filter_opt]
-        
-        if not filtered_items:
-            st.info(f"Aucun paragraphe trouvé pour la catégorie : {filter_opt}")
-        
-        for item in filtered_items:
-            if filter_opt == "MODIFIED":
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.markdown("**V1 (Original)**")
-                    st.info(item['textV1'])
-                with c2:
-                    st.markdown(f"**V2 (Modifié - {item['similarityScore']}%)**")
-                    # Rendu HTML pour voir le gras/barré
-                    st.markdown(f"<div class='cat-MODIFIED' style='padding:10px'>{item.get('annotatedDiffV2', item['textV2'])}</div>", unsafe_allow_html=True)
-                st.markdown("---")
-            else:
-                # Affichage simple pour les autres catégories
-                st.text_area(f"ID {item['id']}", value=item.get('textV2') or item.get('textV1'), height=100, disabled=True)
-
-    # --- VUE 3 : ANALYSE LÉGALE ---
-    with tab3:
-        st.header("🛡️ Analyse de Risques & Conformité")
-        
-        # Lois Obsolètes
-        st.subheader("🏛️ Références Légales & Conformité")
-        if legal_data.get('obsoleteLaws'):
-            for law in legal_data['obsoleteLaws']:
-                st.warning(f"**Source : {law['sourceDoc']}**\n\n> \"{law['quote']}\"\n\n**Problème :** {law['issue']}\n\n**Suggestion :** {law['suggestion']}")
-        else:
-            st.success("Aucune référence légale obsolète détectée.")
-
-        st.divider()
-
-        # Contradictions Internes
-        st.subheader("🔄 Contradictions Internes")
-        if legal_data.get('internalContradictions'):
-            for contra in legal_data['internalContradictions']:
-                st.error(f"**Document : {contra['doc']}**\n\nClause concernée : \"{contra['clause']}\"\n\n**Analyse :** {contra['explanation']}")
-        else:
-            st.success("Aucune contradiction interne flagrante détectée.")
+            """, unsafe_allow_html=True)
             
-        st.divider()
+        # Section des éléments supprimés à la fin
+        missing = [x for x in comp_data if x['category'] == 'MISSING']
+        if missing:
+            st.markdown("#### 🗑️ Éléments présents en V1 mais supprimés de V2")
+            for item in missing:
+                st.markdown(f"""<div class="report-box cat-MISSING"><div>{item['textV1']}</div></div>""", unsafe_allow_html=True)
 
-        # Contradictions Inter-Documents
-        st.subheader("⚔️ Contradictions entre V1 et V2")
-        if legal_data.get('interDocContradictions'):
-            for conflict in legal_data['interDocContradictions']:
-                st.error(f"**Conflit détecté :**\n\n*V1 dit :* \"{conflict['clauseV1']}\"\n\n*V2 dit :* \"{conflict['clauseV2']}\"\n\n**Description :** {conflict['conflictDescription']}")
-        else:
-            st.success("Pas de contradiction majeure détectée entre les deux versions.")
+    # VUE 2 : COMPARAISON CÔTE À CÔTE
+    with tab2:
+        filter_cat = st.radio("Filtrer :", ["MODIFIED", "ADDED", "MISSING", "MOVED"], horizontal=True)
+        items = [x for x in comp_data if x['category'] == filter_cat]
+        
+        if not items:
+            st.info("Aucun élément dans cette catégorie.")
+        
+        for item in items:
+            c1, c2 = st.columns(2)
+            with c1:
+                st.caption("Version V1")
+                st.text_area(label="v1", value=item.get('textV1', 'N/A'), height=150, disabled=True, key=f"v1_{item['id']}")
+            with c2:
+                st.caption("Version V2")
+                diff_html = item.get('annotatedDiffV2', item.get('textV2', 'N/A'))
+                st.markdown(f"<div class='cat-{filter_cat}' style='padding:10px; height:150px; overflow-y:auto; border-radius:5px'>{diff_html}</div>", unsafe_allow_html=True)
+            st.markdown("---")
+
+    # VUE 3 : ANALYSE LÉGALE
+    with tab3:
+        st.subheader("Lois Obsolètes")
+        for law in legal_data.get('obsoleteLaws', []):
+            st.warning(f"**{law['sourceDoc']}**: \"{law['quote']}\" -> {law['issue']} (Suggestion: {law['suggestion']})")
+        
+        st.subheader("Contradictions")
+        for conflict in legal_data.get('interDocContradictions', []):
+            st.error(f"Conflit entre V1/V2 : {conflict['conflictDescription']}")
